@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 声波叶形图标：苔绿底 + 纸白声纹，无渐变无发光 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 声纹五条，圆头描边，安全区内 -->
+    <path
+        android:pathData="M32,48 L32,60"
+        android:strokeColor="#FAF8F4"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M43,42 L43,66"
+        android:strokeColor="#FAF8F4"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,34 L54,74"
+        android:strokeColor="#FAF8F4"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M65,40 L65,68"
+        android:strokeColor="#FAF8F4"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M76,46 L76,62"
+        android:strokeColor="#FAF8F4"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <!-- 叶尖点缀：苔藓新芽 -->
+    <path
+        android:pathData="M54,26 C56,22 59,20 63,20 C63,24 60,27 56,27"
+        android:strokeColor="#C8DBA8"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>
