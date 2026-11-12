@@ -81,6 +81,11 @@ class MossLiveClient(
     /** 本次会话各服务端事件的累计计数（connect 时清零，重连不清），供诊断显示。 */
     val eventCounts: StateFlow<Map<String, Int>> = _eventCounts
 
+    private val _lastDisconnect = MutableStateFlow("")
+
+    /** 最近一次断连/服务端关闭的原因（code/reason），供诊断显示。 */
+    val lastDisconnect: StateFlow<String> = _lastDisconnect
+
     private var ws: WebSocket? = null
     private val pendingMeta = AtomicReference<MossEvent.AudioChunkMeta?>(null)
     @Volatile private var sessionId: String? = null
@@ -161,11 +166,13 @@ class MossLiveClient(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             stopPing()
+            _lastDisconnect.value = "ws-closed code=$code reason=$reason"
             maybeReconnect()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             stopPing()
+            _lastDisconnect.value = "ws-failure ${t.message} http=${response?.code}"
             _events.tryEmit(
                 MossEvent.Error(response?.code?.toString(), t.message ?: "connection failure"),
             )
@@ -192,6 +199,7 @@ class MossLiveClient(
                 _connState.value = ConnState.CONNECTED
             }
             is MossEvent.SessionClosing -> {
+                _lastDisconnect.value = "closing code=${event.code} reason=${event.reason} reconnect=${event.reconnect}"
                 if (!event.reconnect) userClosed = true // 服务端明确不恢复
             }
             else -> Unit

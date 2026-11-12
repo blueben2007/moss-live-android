@@ -135,6 +135,7 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
             eventCounts = container.client.eventCounts.collectAsState().value,
             seq = events,
             captureError = capErr,
+            lastDisconnect = container.client.lastDisconnect.collectAsState().value,
         )
         Spacer(Modifier.height(8.dp))
         Spacer(Modifier.navigationBarsPadding())
