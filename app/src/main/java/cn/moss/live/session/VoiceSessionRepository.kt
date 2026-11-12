@@ -61,6 +61,21 @@ class VoiceSessionRepository(
     /** 麦克风音量电平，驱动声纹动画。 */
     val micLevel get() = mic.level
 
+    /** 联调开关：翻译会话内试听模型产出的译文语音。 */
+    private val translateMonitor = MutableStateFlow(false)
+
+    fun setTranslateMonitor(on: Boolean) {
+        translateMonitor.value = on
+        if (!on) {
+            if (_ui.value.mode == SessionType.TRANSLATE) {
+                speaker?.stopAll()
+                speaker = null
+            }
+        } else if (_ui.value.mode == SessionType.TRANSLATE && _ui.value.isActive && speaker == null) {
+            speaker = SpeakerPlayback(client).also { it.start(scope) }
+        }
+    }
+
     private var eventsJob: Job? = null
     @Volatile private var speaker: SpeakerPlayback? = null
     @Volatile private var dbSessionId: String? = null
@@ -138,11 +153,9 @@ class VoiceSessionRepository(
         when (event) {
             is MossEvent.SessionAttached -> {
                 if (!translate) {
-                    // 自定义人设非空才下发；留空走服务端默认对话行为（排除自定义指令干扰）
+                    // session.updated 只在 session.update 之后返回，必须下发（默认人设兜底）
                     val persona = settingsStore.snapshot().persona
-                    if (persona.isNotBlank()) {
-                        client.updateInstructions(persona)
-                    }
+                    client.updateInstructions(persona.ifBlank { DEFAULT_PERSONA })
                 }
                 // 同传端点不发 session.update（不在其接受列表内）
             }
@@ -159,6 +172,10 @@ class VoiceSessionRepository(
                     else android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 )
                 if (!translate && speaker == null) {
+                    speaker = SpeakerPlayback(client).also { it.start(scope) }
+                }
+                // 翻译联调开关开着：本会话内开始试听译文语音
+                if (translate && translateMonitor.value && speaker == null) {
                     speaker = SpeakerPlayback(client).also { it.start(scope) }
                 }
                 _ui.update { it.copy(phase = Phase.Listening) }
@@ -215,21 +232,26 @@ class VoiceSessionRepository(
                     _ui.update { it.copy(outputText = "") }
                 }
 
-            // 翻译模式不播放译文音频，但回执必须瞬时补上，服务端才继续推下一句
+            // 翻译模式默认丢弃译文音频但须瞬时补回执（服务端靠回执推进）；
+            // 「试听译文」开启时交给 SpeakerPlayback 播放并回执
             is AudioChunk ->
                 if (translate) {
-                    client.chunkCompleted(event.runId, event.turnId.takeIf { it.isNotBlank() }, event.chunkId)
+                    if (speaker == null) {
+                        client.chunkCompleted(event.runId, event.turnId.takeIf { it.isNotBlank() }, event.chunkId)
+                    }
                 } else Unit // 助理模式由 SpeakerPlayback 消费并回执
 
             is MossEvent.ResponseAudioDone ->
                 if (translate) {
-                    audioDoneRuns.add(event.runId)
-                    ackPlayback(event.runId)
+                    if (speaker == null) {
+                        audioDoneRuns.add(event.runId)
+                        ackPlayback(event.runId)
+                    }
                 } else Unit // SpeakerPlayback 处理
 
             is MossEvent.ResponseEnded ->
                 if (translate) {
-                    ackPlayback(event.runId)
+                    if (speaker == null) ackPlayback(event.runId)
                 } else if (_ui.value.phase == Phase.Speaking) {
                     _ui.update { it.copy(phase = Phase.Listening) }
                 }

@@ -128,7 +128,8 @@ fun AssistantScreen(container: AppContainer, onFinished: () -> Unit) {
             },
             micPct = (level * 100).toInt(),
             uplinkKb = uplink / 1024,
-            events = events,
+            eventCounts = container.client.eventCounts.collectAsState().value,
+            seq = events,
             captureError = capErr,
         )
 

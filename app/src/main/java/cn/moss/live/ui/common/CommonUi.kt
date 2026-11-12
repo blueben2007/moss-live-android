@@ -101,23 +101,24 @@ fun StopGlyph(size: Dp, modifier: Modifier = Modifier, color: Color = Color.Whit
     }
 }
 
-/** 联调诊断行：连接状态 / 阶段 / 麦克风电平 / 上行流量 / 服务端事件统计 / 采集异常，可一键复制。 */
+/** 联调诊断行：连接状态 / 阶段 / 麦克风电平 / 上行流量 / 会话事件累计 / 最近事件流 / 采集异常，可一键复制。 */
 @Composable
 fun DiagnosticsRow(
     conn: String,
     phase: String,
     micPct: Int,
     uplinkKb: Long,
-    events: List<String>,
+    eventCounts: Map<String, Int>,
+    seq: List<String>,
     captureError: String?,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    val counts = events.groupingBy { it }.eachCount().entries
-        .joinToString(" ") { "${it.key}×${it.value}" }
+    val countsText = eventCounts.entries.joinToString(" ") { "${it.key}×${it.value}" }
     val text = buildString {
         append("诊断 连接:$conn · 阶段:$phase · 麦克:$micPct% · 上行:${uplinkKb}KB")
-        if (counts.isNotBlank()) append("\n事件: $counts")
+        if (countsText.isNotBlank()) append("\n事件累计: $countsText")
+        if (seq.isNotEmpty()) append("\n最近: " + seq.takeLast(6).joinToString(" "))
         captureError?.let { append("\n采集异常: $it") }
     }
     Column(modifier) {
@@ -125,7 +126,7 @@ fun DiagnosticsRow(
             text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 3,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
         androidx.compose.material3.TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {

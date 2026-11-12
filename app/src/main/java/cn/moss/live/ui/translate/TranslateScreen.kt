@@ -19,11 +19,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -46,6 +50,8 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
     val uplink by container.client.bytesSent.collectAsState()
     val events by container.client.recentEvents.collectAsState()
     val capErr by container.mic.captureError.collectAsState()
+    val level by container.repo.micLevel.collectAsState()
+    var monitor by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(ui.phase) {
@@ -80,7 +86,19 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "试听译文音频（联调）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = monitor, onCheckedChange = {
+                monitor = it
+                container.repo.setTranslateMonitor(it)
+            })
+        }
+        Spacer(Modifier.height(10.dp))
 
         LazyColumn(
             state = listState,
@@ -112,9 +130,10 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
                 is Phase.Failed -> "失败"
                 Phase.Idle -> "空闲"
             },
-            micPct = 0,
+            micPct = (level * 100).toInt(),
             uplinkKb = uplink / 1024,
-            events = events,
+            eventCounts = container.client.eventCounts.collectAsState().value,
+            seq = events,
             captureError = capErr,
         )
         Spacer(Modifier.height(8.dp))

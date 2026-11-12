@@ -73,8 +73,13 @@ class MossLiveClient(
 
     private val _recentEvents = MutableStateFlow<List<String>>(emptyList())
 
-    /** 最近收到的服务端事件名（最多 6 个），供诊断显示。 */
+    /** 最近收到的服务端事件名（最多 8 个），供诊断显示。 */
     val recentEvents: StateFlow<List<String>> = _recentEvents
+
+    private val _eventCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+
+    /** 本次会话各服务端事件的累计计数（connect 时清零，重连不清），供诊断显示。 */
+    val eventCounts: StateFlow<Map<String, Int>> = _eventCounts
 
     private var ws: WebSocket? = null
     private val pendingMeta = AtomicReference<MossEvent.AudioChunkMeta?>(null)
@@ -110,6 +115,8 @@ class MossLiveClient(
         this.userId = if (interpret) null else userId
         this.interpret = interpret
         this.connectUrl = urlOverride ?: wsUrl
+        _bytesSent.value = 0L
+        _eventCounts.value = emptyMap()
         scope = newScope()
         openSocket()
     }
@@ -175,7 +182,10 @@ class MossLiveClient(
         } catch (e: Exception) {
             MossEvent.Unknown("malformed-json")
         }
-        _recentEvents.value = (_recentEvents.value + action).takeLast(10)
+        _recentEvents.value = (_recentEvents.value + action).takeLast(8)
+        _eventCounts.value = _eventCounts.value.toMutableMap().also {
+            it[action] = (it[action] ?: 0) + 1
+        }
         when (event) {
             is MossEvent.SessionAttached -> {
                 sessionId = event.sessionId // 保存，供重连恢复
