@@ -84,6 +84,9 @@ class VoiceSessionRepository(
     /** 非空表示本次助理会话要先下发自定义人设（attach → session.update → 等 updated → 开麦）。 */
     @Volatile private var pendingPersonaUpdate: String? = null
 
+    /** 助理空人设（裸 attach）时置位：收到 session_attached 后再开麦。 */
+    @Volatile private var bareStartPending = false
+
     // ---- 翻译会话状态（turn → 内容） ----
     private val turnSourceFinal = mutableMapOf<Int, String>()
     private val turnSourceLive = mutableMapOf<Int, String>()
@@ -107,20 +110,28 @@ class VoiceSessionRepository(
         beginSession(SessionType.ASSISTANT)
         collectEvents(translate = false)
         val persona = settings.persona
-        // 完全对齐官方直连示例：裸 attach，不带 memory_scope/user 任何额外字段
-        client.connect(null, null, null)
+        // 先登记待办再连接：避免 session_attached 早于标志位赋值（竞态）。
         if (persona.isBlank()) {
-            // Playground 同款流程：裸 attach → 直接开麦，不发任何 session.update
-            client.micState(true)
-            mic.start(android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-            if (speaker == null) {
-                speaker = SpeakerPlayback(client).also { it.start(scope) }
-            }
-            _ui.update { it.copy(phase = Phase.Listening) }
+            // Playground 同款流程：裸 attach → 等 session_attached → 开麦，不发 session.update
+            bareStartPending = true
         } else {
             // 自定义人设：attach → session.update → 等 session.updated → 开麦
             pendingPersonaUpdate = persona
         }
+        client.connect(null, if (settings.memoryEnabled) "user" else "session", settingsStore.ensureUserId())
+    }
+
+    /**
+     * 助理开麦 + 起扬声器。必须在 session_attached 之后调用：协议要求 attach_session
+     * 是第一条消息，此前就 mic_state / 上行音频会违反握手顺序。
+     */
+    private fun startAssistantAudio() {
+        client.micState(true)
+        mic.start(android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        if (speaker == null) {
+            speaker = SpeakerPlayback(client).also { it.start(scope) }
+        }
+        _ui.update { it.copy(phase = Phase.Listening) }
     }
 
     suspend fun startTranslate() {
@@ -145,6 +156,7 @@ class VoiceSessionRepository(
         dbSessionId = id
         messageCount = 0
         pendingPersonaUpdate = null
+        bareStartPending = false
         db.sessionDao().insert(
             SessionEntity(
                 id = id,
@@ -176,8 +188,15 @@ class VoiceSessionRepository(
         when (event) {
             is MossEvent.SessionAttached -> {
                 if (!translate) {
-                    // 仅自定义人设时下发；pendingPersonaUpdate 为空表示已按 Playground 流程直接开麦
-                    pendingPersonaUpdate?.let { client.updateInstructions(it) }
+                    val persona = pendingPersonaUpdate
+                    if (persona != null) {
+                        // 自定义人设：先下发，等 session.updated 再开麦
+                        client.updateInstructions(persona)
+                    } else if (bareStartPending) {
+                        // 裸 attach：session 已建立，现在才开麦
+                        bareStartPending = false
+                        startAssistantAudio()
+                    }
                 }
                 // 同传端点不发 session.update（不在其接受列表内）
             }

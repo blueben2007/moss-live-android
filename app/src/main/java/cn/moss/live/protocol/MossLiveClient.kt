@@ -202,6 +202,10 @@ class MossLiveClient(
                 _lastDisconnect.value = "closing code=${event.code} reason=${event.reason} reconnect=${event.reconnect}"
                 if (!event.reconnect) userClosed = true // 服务端明确不恢复
             }
+            // 协议：每个下行二进制音频帧归属于紧邻其前的 response.audio.context。
+            // 必须在这里暂存，handleBinary 才能配对；否则所有音频帧都会被丢弃，
+            // 既听不到回复，也永远不会发 playback.chunk.completed（同传会因此卡住）。
+            is MossEvent.AudioChunkMeta -> pendingMeta.set(event)
             else -> Unit
         }
         _events.tryEmit(event)

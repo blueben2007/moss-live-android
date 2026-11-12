@@ -156,15 +156,16 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
 
         Section("行为") {
             SettingSwitch(
+                title = "跨会话长期记忆",
+                desc = "助理会记得之前聊过的内容（由服务端按你的账号保存）",
+                checked = settings?.memoryEnabled ?: true,
+                onChange = { scope.launch { container.settings.setMemoryEnabled(it) } },
+            )
+            SettingSwitch(
                 title = "锁屏显示实时字幕",
                 desc = "常驻通知里滚动显示最新译文或对话",
                 checked = settings?.lockCaption ?: false,
                 onChange = { scope.launch { container.settings.setLockCaption(it) } },
-            )
-            Text(
-                "跨会话长期记忆暂未启用（等 MOSS 服务端确认直连支持后恢复）",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
