@@ -28,6 +28,8 @@ data class AppSettings(
     val userId: String,
     /** 同传源语言（"" = 自动检测；服务端自动检测异常时显式指定）。 */
     val translateSource: String,
+    /** 翻译页是否显示对方原文（默认只显示中文译文）。 */
+    val translateShowSource: Boolean,
 )
 
 /** 仅存设备本地的配置；API Key 永不出现在仓库或日志。 */
@@ -41,6 +43,7 @@ class SettingsDataStore(private val context: Context) {
         val PERSONA = stringPreferencesKey("persona")
         val USER_ID = stringPreferencesKey("user_id")
         val TRANSLATE_SOURCE = stringPreferencesKey("translate_source")
+        val TRANSLATE_SHOW_SOURCE = booleanPreferencesKey("translate_show_source")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -54,6 +57,7 @@ class SettingsDataStore(private val context: Context) {
             persona = p[Keys.PERSONA] ?: "",
             userId = p[Keys.USER_ID] ?: "",
             translateSource = p[Keys.TRANSLATE_SOURCE] ?: "",
+            translateShowSource = p[Keys.TRANSLATE_SHOW_SOURCE] ?: false,
         )
     }
 
@@ -82,4 +86,6 @@ class SettingsDataStore(private val context: Context) {
     suspend fun setPersona(value: String) = context.dataStore.edit { it[Keys.PERSONA] = value }
 
     suspend fun setTranslateSource(value: String) = context.dataStore.edit { it[Keys.TRANSLATE_SOURCE] = value }
+
+    suspend fun setTranslateShowSource(value: Boolean) = context.dataStore.edit { it[Keys.TRANSLATE_SHOW_SOURCE] = value }
 }

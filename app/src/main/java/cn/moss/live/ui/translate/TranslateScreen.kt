@@ -51,7 +51,8 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
     val events by container.client.recentEvents.collectAsState()
     val capErr by container.mic.captureError.collectAsState()
     val level by container.repo.micLevel.collectAsState()
-    var monitor by remember { mutableStateOf(false) }
+    val settings by container.settings.settings.collectAsState(initial = null)
+    val showSource = settings?.translateShowSource ?: false
     val listState = rememberLazyListState()
 
     LaunchedEffect(ui.phase) {
@@ -82,23 +83,11 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "听到中文将直接转写 · 不会朗读",
+            "听到什么译什么 · 只显示中文 · 不朗读",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "试听译文音频（联调）",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Switch(checked = monitor, onCheckedChange = {
-                monitor = it
-                container.repo.setTranslateMonitor(it)
-            })
-        }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(18.dp))
 
         LazyColumn(
             state = listState,
@@ -108,7 +97,7 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(30.dp),
         ) {
             itemsIndexed(ui.pairs) { _, pair ->
-                PairView(pair, current = false)
+                PairView(pair, showSource = showSource)
             }
         }
 
@@ -143,12 +132,12 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
 }
 
 @Composable
-private fun PairView(pair: TranslatePair, current: Boolean) {
+private fun PairView(pair: TranslatePair, showSource: Boolean) {
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (pair.source.isNotBlank()) {
+        if (showSource && pair.source.isNotBlank()) {
             Text(
                 pair.source,
                 style = MaterialTheme.typography.bodySmall,
@@ -160,8 +149,7 @@ private fun PairView(pair: TranslatePair, current: Boolean) {
         Text(
             pair.translated.ifBlank { "…" },
             style = MaterialTheme.typography.displaySmall,
-            color = if (current) MaterialTheme.colorScheme.onBackground
-            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.88f),
+            color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center,
         )
     }

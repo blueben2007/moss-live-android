@@ -62,10 +62,13 @@ class VoiceSessionRepository(
     val micLevel get() = mic.level
 
     /** 联调开关：翻译会话内试听模型产出的译文语音。 */
-    private val translateMonitor = MutableStateFlow(false)
+    private val _translateMonitor = MutableStateFlow(false)
+
+    /** 供设置页读取/写入试听开关状态。 */
+    val translateMonitor: StateFlow<Boolean> = _translateMonitor
 
     fun setTranslateMonitor(on: Boolean) {
-        translateMonitor.value = on
+        _translateMonitor.value = on
         if (!on) {
             if (_ui.value.mode == SessionType.TRANSLATE) {
                 speaker?.stopAll()
@@ -98,6 +101,10 @@ class VoiceSessionRepository(
     // ---- 翻译模式译文音频回执（不播放但必须确认，服务端才推下一句） ----
     private val audioDoneRuns = mutableSetOf<String>()
     private val playbackAckedRuns = mutableSetOf<String>()
+
+    // ---- 助理进行中的回复转写（被打断/异常结束时也要落库，防记录缺失） ----
+    @Volatile private var liveOutputRunId: String? = null
+    @Volatile private var liveOutputText: String = ""
 
     // ---- 开始 / 结束 ----
 
@@ -221,7 +228,7 @@ class VoiceSessionRepository(
                     speaker = SpeakerPlayback(client).also { it.start(scope) }
                 }
                 // 翻译联调开关开着：本会话内开始试听译文语音
-                if (translate && translateMonitor.value && speaker == null) {
+                if (translate && _translateMonitor.value && speaker == null) {
                     speaker = SpeakerPlayback(client).also { it.start(scope) }
                 }
                 _ui.update { it.copy(phase = Phase.Listening) }
@@ -262,6 +269,8 @@ class VoiceSessionRepository(
                     turnTransLive[turn] = event.text
                     rebuildTranslateState()
                 } else {
+                    liveOutputRunId = event.runId
+                    liveOutputText = event.text
                     _ui.update { it.copy(outputText = event.text) }
                 }
 
@@ -275,6 +284,8 @@ class VoiceSessionRepository(
                     rebuildTranslateState()
                 } else {
                     insertMessage(Role.ASSISTANT, source = null, display = event.text)
+                    liveOutputRunId = null
+                    liveOutputText = ""
                     _ui.update { it.copy(outputText = "") }
                 }
 
@@ -298,15 +309,27 @@ class VoiceSessionRepository(
             is MossEvent.ResponseEnded ->
                 if (translate) {
                     if (speaker == null) ackPlayback(event.runId)
-                } else if (_ui.value.phase == Phase.Speaking) {
-                    _ui.update { it.copy(phase = Phase.Listening) }
+                } else {
+                    flushPartialAssistantReply(event.runId)
+                    if (_ui.value.phase == Phase.Speaking) {
+                        _ui.update { it.copy(phase = Phase.Listening) }
+                    }
                 }
 
             is MossEvent.ResponseAudioStarted ->
                 if (!translate) _ui.update { it.copy(phase = Phase.Speaking) }
 
-            is MossEvent.ResponseAudioStop, is MossEvent.ResponseInterrupted ->
-                if (!translate) _ui.update { it.copy(phase = Phase.Listening) }
+            is MossEvent.ResponseAudioStop ->
+                if (!translate) {
+                    flushPartialAssistantReply(event.runId)
+                    _ui.update { it.copy(phase = Phase.Listening) }
+                }
+
+            is MossEvent.ResponseInterrupted ->
+                if (!translate) {
+                    flushPartialAssistantReply(event.runId)
+                    _ui.update { it.copy(phase = Phase.Listening) }
+                }
 
             is MossEvent.Error -> {
                 // 1013 限流等场景：客户端会自动退避重连，这里只提示
@@ -322,14 +345,20 @@ class VoiceSessionRepository(
 
     // ---- 翻译状态 ----
 
-    /** 3 秒没等到译文（源语言＝中文时服务端可能不产出）→ 原文提升为大字。 */
+    /**
+     * 3 秒没等到译文时的兜底：仅当原文是中文（含 CJK）才提升为大字显示——
+     * 中文输入的转写就是预期的"译文"；外文原文绝不提升（用户不想看到英文大字）。
+     */
     private fun schedulePromotion(turn: Int) {
         promoteJobs[turn]?.cancel()
         promoteJobs[turn] = scope.launch {
             delay(PROMOTE_AFTER_MS)
             if (turnTransFinal[turn] == null && turnTransLive[turn] == null) {
-                turnPromoted.add(turn)
-                rebuildTranslateState()
+                val src = turnSourceFinal[turn] ?: turnSourceLive[turn] ?: ""
+                if (src.any { it.code in 0x4E00..0x9FFF }) {
+                    turnPromoted.add(turn)
+                    rebuildTranslateState()
+                }
             }
         }
     }
@@ -390,6 +419,16 @@ class VoiceSessionRepository(
         messageCount++
     }
 
+    /** 助理回复被打断/异常结束时，把已生成的部分转写也落库，避免回复记录缺失。 */
+    private suspend fun flushPartialAssistantReply(runId: String) {
+        if (runId.isNotBlank() && liveOutputRunId == runId && liveOutputText.isNotBlank()) {
+            insertMessage(Role.ASSISTANT, source = null, display = liveOutputText)
+            liveOutputRunId = null
+            liveOutputText = ""
+            _ui.update { it.copy(outputText = "") }
+        }
+    }
+
     // ---- 挂断 / 停止 ----
 
     suspend fun hangUp() {
@@ -400,6 +439,12 @@ class VoiceSessionRepository(
         client.close()
         eventsJob?.cancel()
         eventsJob = null
+        // 会话结束前把未定稿的助理回复落库
+        if (liveOutputText.isNotBlank()) {
+            insertMessage(Role.ASSISTANT, source = null, display = liveOutputText)
+        }
+        liveOutputRunId = null
+        liveOutputText = ""
         val id = dbSessionId
         if (id != null) {
             if (messageCount > 0) {

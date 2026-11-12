@@ -167,6 +167,21 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 checked = settings?.lockCaption ?: false,
                 onChange = { scope.launch { container.settings.setLockCaption(it) } },
             )
+            SettingSwitch(
+                title = "翻译页显示原文",
+                desc = "关闭后翻译页只显示中文译文",
+                checked = settings?.translateShowSource ?: false,
+                onChange = { scope.launch { container.settings.setTranslateShowSource(it) } },
+            )
+        }
+
+        Section("联调") {
+            SettingSwitch(
+                title = "试听译文音频",
+                desc = "同传会话内播放模型产出的译文语音（排查用，平时关闭）",
+                checked = container.repo.translateMonitor.collectAsState().value,
+                onChange = { container.repo.setTranslateMonitor(it) },
+            )
         }
 
         Section("助理人设") {
