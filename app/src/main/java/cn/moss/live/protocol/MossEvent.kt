@@ -78,8 +78,16 @@ sealed interface MossEvent {
                 "input.transcript.updated" -> InputTranscriptUpdated(data.optString("text"), data.optInt("turn").takeIf { data.has("turn") })
                 "input.transcript.done" -> InputTranscriptDone(data.optString("text"), data.optInt("turn").takeIf { data.has("turn") })
                 "input.transcript.revised" -> InputTranscriptRevised(data.optString("text"), data.optString("previous"), data.optInt("turn").takeIf { data.has("turn") })
-                "output.transcript.updated" -> OutputTranscriptUpdated(data.optString("text"), data.optString("run_id"), data.optString("turn_id"))
-                "output.transcript.done" -> OutputTranscriptDone(data.optString("text"), data.optString("run_id"), data.optString("turn_id"))
+                "output.transcript.updated" -> OutputTranscriptUpdated(
+                    data.optString("text"),
+                    data.optString("run_id"),
+                    if (data.has("turn_id")) data.optString("turn_id") else data.optString("source_turn"),
+                )
+                "output.transcript.done" -> OutputTranscriptDone(
+                    data.optString("text"),
+                    data.optString("run_id"),
+                    if (data.has("turn_id")) data.optString("turn_id") else data.optString("source_turn"),
+                )
                 "response.audio.started" -> ResponseAudioStarted(data.optString("run_id"), data.optString("turn_id"))
                 "response.audio.context" -> AudioChunkMeta(
                     runId = data.optString("run_id"),

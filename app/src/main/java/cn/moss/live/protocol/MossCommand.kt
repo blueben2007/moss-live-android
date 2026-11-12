@@ -25,6 +25,14 @@ object MossCommand {
         return o.toString()
     }
 
+    /** 同传端点要求：开启 tagged-v1 二进制协议后，音频帧带 0x00 前缀。 */
+    fun mediaModeTagged(): String {
+        val o = JSONObject()
+        o.put("action", "media.mode")
+        o.put("binary_protocol", "tagged-v1")
+        return o.toString()
+    }
+
     /**
      * 整体替换会话指令（助理人设或同传指令），≤16000 字符。
      * 官方示例：session 对象在顶层，不在 data 内（与全部命令字段一致）。
@@ -45,31 +53,31 @@ object MossCommand {
 
     fun ping(): String = JSONObject().put("action", "ping").toString()
 
-    /** 每块音频播完必发，服务端靠它推进节奏。 */
-    fun playbackChunkCompleted(runId: String, turnId: String, chunkId: String): String {
+    /** 每块音频播完必发，服务端靠它推进节奏；turn_id 缺省时省略（同传端点的回执无 turn）。 */
+    fun playbackChunkCompleted(runId: String, turnId: String?, chunkId: String): String {
         val o = JSONObject()
         o.put("action", "playback.chunk.completed")
         o.put("run_id", runId)
-        o.put("turn_id", turnId)
+        if (!turnId.isNullOrBlank()) o.put("turn_id", turnId)
         o.put("chunk_id", chunkId)
         return o.toString()
     }
 
     /** 整条回复播完必发。 */
-    fun playbackCompleted(runId: String, turnId: String): String {
+    fun playbackCompleted(runId: String, turnId: String?): String {
         val o = JSONObject()
         o.put("action", "playback.completed")
         o.put("run_id", runId)
-        o.put("turn_id", turnId)
+        if (!turnId.isNullOrBlank()) o.put("turn_id", turnId)
         return o.toString()
     }
 
     /** 被打断时回传：已播块确认已在播完时逐块发过，这里带当前块已播毫秒数。 */
-    fun playbackStopped(runId: String, turnId: String, playedAudioMs: Long): String {
+    fun playbackStopped(runId: String, turnId: String?, playedAudioMs: Long): String {
         val o = JSONObject()
         o.put("action", "playback.stopped")
         o.put("run_id", runId)
-        o.put("turn_id", turnId)
+        if (!turnId.isNullOrBlank()) o.put("turn_id", turnId)
         o.put("played_audio_ms", playedAudioMs)
         return o.toString()
     }

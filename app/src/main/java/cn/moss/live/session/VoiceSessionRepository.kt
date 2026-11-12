@@ -14,6 +14,7 @@ import cn.moss.live.protocol.MossEvent
 import cn.moss.live.protocol.MossLiveClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -25,9 +26,13 @@ import java.util.UUID
 /**
  * 会话状态机（单例）：UI 与前台服务都经它通信。
  *
- * 两种模式：
- * - 助理：全双工对话。麦克风常开、扬声器播放、可打断。
- * - 翻译：同传字幕。只听不说——SpeakerPlayback 不实例化（无任何朗读路径）。
+ * 两种模式走两个端点：
+ * - 助理：/v1/realtime 全双工对话。麦克风常开、扬声器播放、可打断。
+ * - 翻译：/v1/realtime/interpret 专用同传端点。只听不说——不实例化 SpeakerPlayback，
+ *   但译文音频到达后必须**立即补发播放回执**（服务端靠回执推进下一句），否则字幕卡死。
+ *
+ * 翻译状态按 turn 编号驱动：译句可能滞后于语音，来源/译文用 map 配对。
+ * 中文输入（源=目标语言）服务端可能不产生译文：3 秒未到译文则把原文提升为大字显示。
  *
  * 会话切分：助理拨通→挂断、翻译开始→停止，各为一条记录；无消息的会话不落库。
  */
@@ -43,13 +48,11 @@ class VoiceSessionRepository(
         /** 助理默认人设（极简无名），自定义人设留空时使用。 */
         const val DEFAULT_PERSONA = "用简洁口语化的中文回答，短句优先，不啰嗦。"
 
-        /** 翻译模式同传指令：任意语种→中文；中文输入直接转写，绝不朗读。 */
-        const val TRANSLATE_INSTRUCTIONS =
-            "你是一个实时同声传译机。把用户说的任何语言实时翻译成简体中文。规则：" +
-                "1) 只输出译文本身，不要任何解释、前言或后语；" +
-                "2) 如果用户说的已经是中文，就原样转写用户的话，不要翻译；" +
-                "3) 语气与标点保持口语自然；" +
-                "4) 每次只译一句完整的话，不要合并多句。"
+        /** 同传专用端点：target 固定中文，source 省略＝自动检测。 */
+        const val INTERPRET_URL = "wss://api.mosi.cn/v1/realtime/interpret?model=moss-live-1.0&target=zh"
+
+        /** 原文提升为译文显示前的等待毫秒数（等源语言≠中文时的翻译产出）。 */
+        private const val PROMOTE_AFTER_MS = 3_000L
     }
 
     private val _ui = MutableStateFlow(SessionUiState())
@@ -62,7 +65,18 @@ class VoiceSessionRepository(
     @Volatile private var speaker: SpeakerPlayback? = null
     @Volatile private var dbSessionId: String? = null
     @Volatile private var messageCount = 0
-    @Volatile private var pendingSource: String? = null
+
+    // ---- 翻译会话状态（turn → 内容） ----
+    private val turnSourceFinal = mutableMapOf<Int, String>()
+    private val turnSourceLive = mutableMapOf<Int, String>()
+    private val turnTransFinal = mutableMapOf<Int, String>()
+    private val turnTransLive = mutableMapOf<Int, String>()
+    private val turnPromoted = mutableSetOf<Int>()
+    private val promoteJobs = mutableMapOf<Int, Job>()
+
+    // ---- 翻译模式译文音频回执（不播放但必须确认，服务端才推下一句） ----
+    private val audioDoneRuns = mutableSetOf<String>()
+    private val playbackAckedRuns = mutableSetOf<String>()
 
     // ---- 开始 / 结束 ----
 
@@ -73,8 +87,8 @@ class VoiceSessionRepository(
             return
         }
         beginSession(SessionType.ASSISTANT)
-        collectEvents(translate = false, settings = settings)
-        connectWithMemory(settings)
+        collectEvents(translate = false)
+        client.connect(null, if (settings.memoryEnabled) "user" else "session", settingsStore.ensureUserId())
     }
 
     suspend fun startTranslate() {
@@ -84,24 +98,15 @@ class VoiceSessionRepository(
             return
         }
         beginSession(SessionType.TRANSLATE)
-        collectEvents(translate = true, settings = settings)
-        connectWithMemory(settings)
-    }
-
-    /** memory_scope=user 必须带 user 标识（服务端校验），由本机稳定 UUID 供给。 */
-    private suspend fun connectWithMemory(settings: AppSettings) {
-        if (settings.memoryEnabled) {
-            client.connect(null, "user", settingsStore.ensureUserId())
-        } else {
-            client.connect(null, "session", null)
-        }
+        collectEvents(translate = true)
+        // 同传端点：不带 user/memory 参数（无会话恢复，每条连接新会话）
+        client.connect(null, null, null, urlOverride = INTERPRET_URL, interpret = true)
     }
 
     private suspend fun beginSession(mode: SessionType) {
         val id = UUID.randomUUID().toString()
         dbSessionId = id
         messageCount = 0
-        pendingSource = null
         db.sessionDao().insert(
             SessionEntity(
                 id = id,
@@ -111,6 +116,7 @@ class VoiceSessionRepository(
                 endedAt = null,
             ),
         )
+        if (mode == SessionType.TRANSLATE) clearTranslateState()
         _ui.value = SessionUiState(
             mode = mode,
             phase = Phase.Connecting,
@@ -119,23 +125,24 @@ class VoiceSessionRepository(
         )
     }
 
-    private fun collectEvents(translate: Boolean, settings: AppSettings) {
+    private fun collectEvents(translate: Boolean) {
         eventsJob?.cancel()
         eventsJob = scope.launch {
-            client.events.collect { event -> handle(event, translate, settings) }
+            client.events.collect { event -> handle(event, translate) }
         }
     }
 
     // ---- 事件处理（协议落点） ----
 
-    private suspend fun handle(event: MossEvent, translate: Boolean, settings: AppSettings) {
+    private suspend fun handle(event: MossEvent, translate: Boolean) {
         when (event) {
             is MossEvent.SessionAttached -> {
-                // attach 后先下发指令，等 session.updated 确认成功再开麦（协议时序要求）
-                val instructions =
-                    if (translate) TRANSLATE_INSTRUCTIONS
-                    else settings.persona.ifBlank { DEFAULT_PERSONA }
-                client.updateInstructions(instructions)
+                if (!translate) {
+                    // attach 后先下发指令，等 session.updated 确认成功再开麦（协议时序要求）
+                    val settings = settingsStore.snapshot()
+                    client.updateInstructions(settings.persona.ifBlank { DEFAULT_PERSONA })
+                }
+                // 同传端点不发 session.update（不在其接受列表内）
             }
 
             is MossEvent.SessionUpdated -> {
@@ -144,7 +151,11 @@ class VoiceSessionRepository(
                     return
                 }
                 client.micState(true)
-                mic.start()
+                // 翻译无播放，用普通 MIC 音源（部分 ROM 上 VOICE_COMMUNICATION 会静音）
+                mic.start(
+                    if (translate) android.media.MediaRecorder.AudioSource.MIC
+                    else android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                )
                 if (!translate && speaker == null) {
                     speaker = SpeakerPlayback(client).also { it.start(scope) }
                 }
@@ -152,63 +163,74 @@ class VoiceSessionRepository(
             }
 
             is MossEvent.InputTranscriptUpdated ->
-                _ui.update { it.copy(inputText = event.text) }
-
-            is MossEvent.InputTranscriptDone -> {
                 if (translate) {
-                    pendingSource = event.text
-                    _ui.update { st ->
-                        st.copy(
-                            inputText = "",
-                            currentPair = TranslatePair(event.text, st.currentPair?.translated ?: ""),
-                        )
-                    }
+                    turnSourceLive[event.turn ?: 0] = event.text
+                    rebuildTranslateState()
+                } else {
+                    _ui.update { it.copy(inputText = event.text) }
+                }
+
+            is MossEvent.InputTranscriptDone ->
+                if (translate) {
+                    val turn = event.turn ?: 0
+                    turnSourceFinal[turn] = event.text
+                    turnSourceLive.remove(turn)
+                    schedulePromotion(turn)
+                    rebuildTranslateState()
                 } else {
                     insertMessage(Role.USER, source = null, display = event.text)
                     _ui.update { it.copy(inputText = "") }
                 }
-            }
 
-            is MossEvent.InputTranscriptRevised -> {
-                // 修订视作当轮转写的最新版本
+            is MossEvent.InputTranscriptRevised ->
                 if (translate) {
-                    pendingSource = event.text
-                    _ui.update { st ->
-                        st.copy(currentPair = TranslatePair(event.text, st.currentPair?.translated ?: ""))
-                    }
-                }
-            }
+                    val turn = event.turn ?: 0
+                    turnSourceFinal[turn] = event.text
+                    turnSourceLive.remove(turn)
+                    rebuildTranslateState()
+                } else Unit
 
-            is MossEvent.OutputTranscriptUpdated -> {
+            is MossEvent.OutputTranscriptUpdated ->
                 if (translate) {
-                    _ui.update { st ->
-                        st.copy(
-                            currentPair = TranslatePair(
-                                st.currentPair?.source ?: pendingSource ?: "",
-                                event.text,
-                            ),
-                        )
-                    }
+                    val turn = event.turnId.toIntOrNull() ?: 0
+                    promoteJobs[turn]?.cancel()
+                    turnTransLive[turn] = event.text
+                    rebuildTranslateState()
                 } else {
                     _ui.update { it.copy(outputText = event.text) }
                 }
-            }
 
-            is MossEvent.OutputTranscriptDone -> {
+            is MossEvent.OutputTranscriptDone ->
                 if (translate) {
-                    val pair = TranslatePair(pendingSource ?: "", event.text)
-                    if (pair.translated.isNotBlank()) {
-                        insertMessage(Role.USER, source = pair.source.ifBlank { null }, display = pair.translated)
-                    }
-                    pendingSource = null
-                    _ui.update { st ->
-                        st.copy(pairs = st.pairs + pair, currentPair = null, outputText = "")
-                    }
+                    val turn = event.turnId.toIntOrNull() ?: 0
+                    promoteJobs[turn]?.cancel()
+                    turnTransFinal[turn] = event.text
+                    turnTransLive.remove(turn)
+                    finalizeTranslateMessage(turn)
+                    rebuildTranslateState()
                 } else {
                     insertMessage(Role.ASSISTANT, source = null, display = event.text)
                     _ui.update { it.copy(outputText = "") }
                 }
-            }
+
+            // 翻译模式不播放译文音频，但回执必须瞬时补上，服务端才继续推下一句
+            is AudioChunk ->
+                if (translate) {
+                    client.chunkCompleted(event.runId, event.turnId.takeIf { it.isNotBlank() }, event.chunkId)
+                } else Unit // 助理模式由 SpeakerPlayback 消费并回执
+
+            is MossEvent.ResponseAudioDone ->
+                if (translate) {
+                    audioDoneRuns.add(event.runId)
+                    ackPlayback(event.runId)
+                } else Unit // SpeakerPlayback 处理
+
+            is MossEvent.ResponseEnded ->
+                if (translate) {
+                    ackPlayback(event.runId)
+                } else if (_ui.value.phase == Phase.Speaking) {
+                    _ui.update { it.copy(phase = Phase.Listening) }
+                }
 
             is MossEvent.ResponseAudioStarted ->
                 if (!translate) _ui.update { it.copy(phase = Phase.Speaking) }
@@ -216,22 +238,70 @@ class VoiceSessionRepository(
             is MossEvent.ResponseAudioStop, is MossEvent.ResponseInterrupted ->
                 if (!translate) _ui.update { it.copy(phase = Phase.Listening) }
 
-            is MossEvent.ResponseEnded ->
-                if (!translate && _ui.value.phase == Phase.Speaking) {
-                    _ui.update { it.copy(phase = Phase.Listening) }
-                }
-
             is MossEvent.Error -> {
                 // 1013 限流等场景：客户端会自动退避重连，这里只提示
                 _ui.update { it.copy(errorMessage = "${event.code ?: ""} ${event.message}".trim()) }
             }
 
-            is AudioChunk, is MossEvent.AudioChunkMeta,
-            is MossEvent.ResponseAudioDone, is MossEvent.Pong,
+            is MossEvent.AudioChunkMeta, is MossEvent.Pong,
             is MossEvent.Unknown, is MossEvent.SessionClosing,
             is MossEvent.VoiceChanged, is MossEvent.InputSpeechStarted,
             is MossEvent.InputSpeechStopped -> Unit
         }
+    }
+
+    // ---- 翻译状态 ----
+
+    /** 3 秒没等到译文（源语言＝中文时服务端可能不产出）→ 原文提升为大字。 */
+    private fun schedulePromotion(turn: Int) {
+        promoteJobs[turn]?.cancel()
+        promoteJobs[turn] = scope.launch {
+            delay(PROMOTE_AFTER_MS)
+            if (turnTransFinal[turn] == null && turnTransLive[turn] == null) {
+                turnPromoted.add(turn)
+                rebuildTranslateState()
+            }
+        }
+    }
+
+    private fun ackPlayback(runId: String) {
+        if (runId !in audioDoneRuns || runId in playbackAckedRuns) return
+        playbackAckedRuns.add(runId)
+        client.playbackCompleted(runId, null)
+    }
+
+    private fun rebuildTranslateState() {
+        val turns = (turnSourceFinal.keys + turnSourceLive.keys + turnTransFinal.keys + turnTransLive.keys)
+            .toSortedSet()
+        val list = turns.map { t ->
+            val src = turnSourceFinal[t] ?: turnSourceLive[t] ?: ""
+            val trans = turnTransFinal[t] ?: turnTransLive[t]
+            TranslatePair(
+                source = src,
+                translated = trans ?: if (t in turnPromoted) src else "",
+            )
+        }
+        _ui.update { it.copy(pairs = list) }
+    }
+
+    private fun clearTranslateState() {
+        promoteJobs.values.forEach { it.cancel() }
+        promoteJobs.clear()
+        turnSourceFinal.clear()
+        turnSourceLive.clear()
+        turnTransFinal.clear()
+        turnTransLive.clear()
+        turnPromoted.clear()
+        audioDoneRuns.clear()
+        playbackAckedRuns.clear()
+    }
+
+    /** 一句译文定稿 → 落库（原文小字 + 译文大字成对）。 */
+    private suspend fun finalizeTranslateMessage(turn: Int) {
+        val src = turnSourceFinal[turn] ?: turnSourceLive[turn] ?: ""
+        val trans = turnTransFinal[turn] ?: return
+        if (trans.isBlank() && src.isBlank()) return
+        insertMessage(Role.USER, source = src.ifBlank { null }, display = trans)
     }
 
     private suspend fun insertMessage(role: Role, source: String?, display: String) {
@@ -274,7 +344,7 @@ class VoiceSessionRepository(
             }
         }
         dbSessionId = null
-        pendingSource = null
+        clearTranslateState()
         _ui.value = SessionUiState()
     }
 

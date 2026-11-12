@@ -23,9 +23,10 @@ data class SessionUiState(
     val inputText: String = "",
     /** 模型实时转写（整体替换）。 */
     val outputText: String = "",
-    /** 翻译模式：进行中的一对（原文已定稿、译文流式）。 */
-    val currentPair: TranslatePair? = null,
-    /** 翻译模式：本会话已定稿的字幕对。 */
+    /**
+     * 翻译模式：本会话字幕对（按 turn 顺序）。最后一项通常是进行中的 turn；
+     * translated 为空表示译文未到（未提升前显示省略号）。
+     */
     val pairs: List<TranslatePair> = emptyList(),
     val errorMessage: String? = null,
 ) {

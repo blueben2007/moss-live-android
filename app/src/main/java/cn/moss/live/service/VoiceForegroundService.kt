@@ -136,7 +136,7 @@ class VoiceForegroundService : Service() {
         // 开关开启：最新译文 / 最新一句
         return when (state.mode) {
             SessionType.TRANSLATE ->
-                (state.currentPair?.translated ?: state.pairs.lastOrNull()?.translated ?: state.outputText).ifBlank {
+                (state.pairs.lastOrNull()?.let { it.translated.ifBlank { it.source } } ?: state.outputText).ifBlank {
                     "$mode · 聆听中"
                 }
             SessionType.ASSISTANT ->

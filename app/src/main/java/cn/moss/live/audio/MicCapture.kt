@@ -14,8 +14,10 @@ import kotlin.math.sqrt
  * 麦克风采集：16kHz 单声道 PCM S16LE，128ms 一块，按实时速率经回调上行。
  *
  * 协议要点：用户停止说话后仍持续采集上行（自然含静音帧，供服务端检测停顿）；
- * 播放期间也保持采集（支持全双工打断）。音源用 VOICE_COMMUNICATION 启用
- * 系统级回声消除，避免扬声器播放的回复被当作用户语音。
+ * 播放期间也保持采集（支持全双工打断）。
+ *
+ * 音源选择：助理用 VOICE_COMMUNICATION（系统回声消除，防止扬声器回答被当成人声）；
+ * 翻译不播放声音，用普通 MIC——部分 ROM 上 VOICE_COMMUNICATION 音源会静音，绕开兼容坑。
  */
 class MicCapture(private val onChunk: (ByteArray) -> Unit) {
 
@@ -33,28 +35,52 @@ class MicCapture(private val onChunk: (ByteArray) -> Unit) {
     /** 0..1 归一化音量电平，驱动声纹动画。 */
     val level: StateFlow<Float> = _level
 
-    fun start() {
+    private val _captureError = MutableStateFlow<String?>(null)
+
+    /** 采集异常（初始化失败、持续读失败等），供界面诊断显示，不再抛异常炸掉事件循环。 */
+    val captureError: StateFlow<String?> = _captureError
+
+    fun start(source: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
         if (running) return
+        _captureError.value = null
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
         )
         val rec = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            source,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
             maxOf(minBuf, CHUNK_SAMPLES * 4),
         )
-        check(rec.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord 初始化失败" }
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            rec.release()
+            _captureError.value = "AudioRecord 初始化失败（检查是否授予录音权限）"
+            return
+        }
         record = rec
         running = true
         thread = thread(name = "mic-capture") {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             rec.startRecording()
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                _captureError.value = "录音启动失败（recordingState 异常）"
+                return@thread
+            }
             val buf = ShortArray(CHUNK_SAMPLES)
+            var failures = 0
             while (running) {
                 val n = rec.read(buf, 0, buf.size)
-                if (n <= 0) continue
+                if (n < 0) {
+                    failures++
+                    if (failures > 100) {
+                        _captureError.value = "录音读取持续失败（code=$n），采集已停止"
+                        break
+                    }
+                    continue
+                }
+                if (n == 0) continue
+                failures = 0
                 var sum = 0.0
                 for (i in 0 until n) {
                     val v = buf[i].toDouble()

@@ -6,10 +6,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -95,5 +97,40 @@ fun StopGlyph(size: Dp, modifier: Modifier = Modifier, color: Color = Color.Whit
             color = color,
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.toPx() / 4),
         )
+    }
+}
+
+/** 联调诊断行：连接状态 / 麦克风电平 / 上行流量 / 最近服务端事件 / 采集异常。 */
+@Composable
+fun DiagnosticsRow(
+    conn: String,
+    micPct: Int,
+    uplinkKb: Long,
+    events: List<String>,
+    captureError: String?,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(
+            "诊断 连接:$conn · 麦克:$micPct% · 上行:${uplinkKb}KB",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (events.isNotEmpty()) {
+            Text(
+                "事件: " + events.takeLast(4).joinToString(" "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        captureError?.let {
+            Text(
+                "采集异常: $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }

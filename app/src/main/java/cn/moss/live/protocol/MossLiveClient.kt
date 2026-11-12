@@ -66,11 +66,23 @@ class MossLiveClient(
     private val _connState = MutableStateFlow(ConnState.IDLE)
     val connState: StateFlow<ConnState> = _connState
 
+    private val _bytesSent = MutableStateFlow(0L)
+
+    /** 累计成功入队上行的音频字节数，供诊断显示。 */
+    val bytesSent: StateFlow<Long> = _bytesSent
+
+    private val _recentEvents = MutableStateFlow<List<String>>(emptyList())
+
+    /** 最近收到的服务端事件名（最多 6 个），供诊断显示。 */
+    val recentEvents: StateFlow<List<String>> = _recentEvents
+
     private var ws: WebSocket? = null
     private val pendingMeta = AtomicReference<MossEvent.AudioChunkMeta?>(null)
     @Volatile private var sessionId: String? = null
     @Volatile private var memoryScope: String? = null
     @Volatile private var userId: String? = null
+    @Volatile private var interpret = false
+    @Volatile private var connectUrl: String = wsUrl
     @Volatile private var userClosed = false
     @Volatile private var reconnectAttempt = 0
     private var scope: CoroutineScope = newScope()
@@ -80,23 +92,34 @@ class MossLiveClient(
 
     /**
      * sessionId=null 建新会话；传原 session_id 恢复会话。memoryScope="user" 开长期记忆。
-     * userId：本机稳定标识，memory_scope=user 时服务端要求连接 URL 必须带 user 参数；
-     * 重连时沿用同一 user（同 user、同选项 reattach）。
+     * userId：本机稳定标识，memory_scope=user 时连接 URL 必须带 user 参数。
+     * urlOverride + interpret=true：连同传端点（/v1/realtime/interpret）——attach 后
+     * 须发 media.mode(tagged-v1)，上行音频带 0x00 前缀，不传 user 等额外查询参数。
      */
-    fun connect(sessionId: String?, memoryScope: String?, userId: String? = null) {
+    fun connect(
+        sessionId: String?,
+        memoryScope: String?,
+        userId: String? = null,
+        urlOverride: String? = null,
+        interpret: Boolean = false,
+    ) {
         userClosed = false
         reconnectAttempt = 0
         this.sessionId = sessionId
         this.memoryScope = memoryScope
-        this.userId = userId
+        this.userId = if (interpret) null else userId
+        this.interpret = interpret
+        this.connectUrl = urlOverride ?: wsUrl
         scope = newScope()
         openSocket()
     }
 
     private fun openSocket() {
         _connState.value = if (reconnectAttempt == 0) ConnState.CONNECTING else ConnState.RECONNECTING
-        val url = if (userId.isNullOrBlank()) wsUrl
-        else "$wsUrl&user=${java.net.URLEncoder.encode(userId, "UTF-8")}"
+        var url = connectUrl
+        if (!interpret && !userId.isNullOrBlank()) {
+            url = "$url&user=${java.net.URLEncoder.encode(userId, "UTF-8")}"
+        }
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer ${apiKeyProvider()}")
@@ -108,6 +131,13 @@ class MossLiveClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             reconnectAttempt = 0
             webSocket.send(MossCommand.attachSession(sessionId, memoryScope))
+            if (interpret) {
+                // 同传端点时序：attach → media.mode(tagged-v1) → 开麦
+                webSocket.send(MossCommand.mediaModeTagged())
+                webSocket.send(MossCommand.micState(true))
+                // 通知仓库层就绪（服务端不回 session.updated，用合成事件接续流程）
+                _events.tryEmit(MossEvent.SessionUpdated("", emptyList()))
+            }
             startPingLoop()
         }
 
@@ -134,12 +164,15 @@ class MossLiveClient(
     }
 
     private fun handleText(text: String) {
+        var action = "malformed"
         val event = try {
             val root = JSONObject(text)
-            MossEvent.parse(root.optString("action"), root)
+            action = root.optString("action")
+            MossEvent.parse(action, root)
         } catch (e: Exception) {
             MossEvent.Unknown("malformed-json")
         }
+        _recentEvents.value = (_recentEvents.value + action).takeLast(6)
         when (event) {
             is MossEvent.SessionAttached -> {
                 sessionId = event.sessionId // 保存，供重连恢复
@@ -195,8 +228,11 @@ class MossLiveClient(
     /** 16kHz PCM S16LE 音频块（MicCapture 按实时速率持续供给，静音也照发）。 */
     fun sendAudio(pcm16kLe: ByteArray) {
         val buffer = okio.Buffer()
+        if (interpret) buffer.writeByte(0x00) // tagged-v1：音频帧标记
         buffer.write(pcm16kLe, 0, pcm16kLe.size)
-        ws?.send(buffer.readByteString())
+        if (ws?.send(buffer.readByteString()) == true) {
+            _bytesSent.value += pcm16kLe.size + if (interpret) 1 else 0
+        }
     }
 
     fun micState(enabled: Boolean) {
@@ -211,15 +247,15 @@ class MossLiveClient(
         ws?.send(MossCommand.changeVoice(voiceId))
     }
 
-    fun chunkCompleted(runId: String, turnId: String, chunkId: String) {
+    fun chunkCompleted(runId: String, turnId: String?, chunkId: String) {
         ws?.send(MossCommand.playbackChunkCompleted(runId, turnId, chunkId))
     }
 
-    fun playbackCompleted(runId: String, turnId: String) {
+    fun playbackCompleted(runId: String, turnId: String?) {
         ws?.send(MossCommand.playbackCompleted(runId, turnId))
     }
 
-    fun playbackStopped(runId: String, turnId: String, playedAudioMs: Long) {
+    fun playbackStopped(runId: String, turnId: String?, playedAudioMs: Long) {
         ws?.send(MossCommand.playbackStopped(runId, turnId, playedAudioMs))
     }
 

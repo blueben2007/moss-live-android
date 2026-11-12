@@ -46,10 +46,9 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
     LaunchedEffect(ui.phase) {
         if (ui.phase == Phase.Idle) onFinished()
     }
-    // 新字幕到达时滚到底部
-    LaunchedEffect(ui.pairs.size, ui.currentPair) {
-        val count = ui.pairs.size + if (ui.currentPair != null) 1 else 0
-        if (count > 0) listState.animateScrollToItem(count - 1)
+    // 字幕更新时滚到底部
+    LaunchedEffect(ui.pairs) {
+        if (ui.pairs.isNotEmpty()) listState.animateScrollToItem(ui.pairs.size - 1)
     }
 
     Column(
@@ -87,11 +86,6 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
         ) {
             itemsIndexed(ui.pairs) { _, pair ->
                 PairView(pair, current = false)
-            }
-            ui.currentPair?.let { cp ->
-                item(key = "current") {
-                    PairView(cp, current = true)
-                }
             }
         }
 
