@@ -33,6 +33,7 @@ import cn.moss.live.AppContainer
 import cn.moss.live.stopVoiceSession
 import cn.moss.live.session.Phase
 import cn.moss.live.session.TranslatePair
+import cn.moss.live.ui.common.DiagnosticsRow
 import cn.moss.live.ui.common.ElapsedText
 import cn.moss.live.ui.common.StopGlyph
 
@@ -41,6 +42,10 @@ import cn.moss.live.ui.common.StopGlyph
 fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
     val context = LocalContext.current
     val ui by container.repo.ui.collectAsState()
+    val conn by container.client.connState.collectAsState()
+    val uplink by container.client.bytesSent.collectAsState()
+    val events by container.client.recentEvents.collectAsState()
+    val capErr by container.mic.captureError.collectAsState()
     val listState = rememberLazyListState()
 
     LaunchedEffect(ui.phase) {
@@ -97,7 +102,22 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
                 modifier = Modifier.padding(vertical = 8.dp),
             )
         }
-        Spacer(Modifier.height(16.dp))
+
+        DiagnosticsRow(
+            conn = conn.name,
+            phase = when (ui.phase) {
+                Phase.Connecting -> "连接中"
+                Phase.Listening -> "聆听"
+                Phase.Speaking -> "说话"
+                is Phase.Failed -> "失败"
+                Phase.Idle -> "空闲"
+            },
+            micPct = 0,
+            uplinkKb = uplink / 1024,
+            events = events,
+            captureError = capErr,
+        )
+        Spacer(Modifier.height(8.dp))
         Spacer(Modifier.navigationBarsPadding())
     }
 }

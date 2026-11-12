@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import cn.moss.live.AppContainer
 import cn.moss.live.stopVoiceSession
 import cn.moss.live.session.Phase
+import cn.moss.live.ui.common.DiagnosticsRow
 import cn.moss.live.ui.common.ElapsedText
 import cn.moss.live.ui.common.StopGlyph
 import cn.moss.live.ui.common.VoiceWaveform
@@ -43,6 +44,9 @@ fun AssistantScreen(container: AppContainer, onFinished: () -> Unit) {
     val ui by container.repo.ui.collectAsState()
     val level by container.repo.micLevel.collectAsState()
     val conn by container.client.connState.collectAsState()
+    val uplink by container.client.bytesSent.collectAsState()
+    val events by container.client.recentEvents.collectAsState()
+    val capErr by container.mic.captureError.collectAsState()
 
     // 挂断完成后自动回到首页
     LaunchedEffect(ui.phase) {
@@ -112,6 +116,21 @@ fun AssistantScreen(container: AppContainer, onFinished: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+
+        DiagnosticsRow(
+            conn = conn.name,
+            phase = when (ui.phase) {
+                Phase.Connecting -> "连接中"
+                Phase.Listening -> "聆听"
+                Phase.Speaking -> "说话"
+                is Phase.Failed -> "失败"
+                Phase.Idle -> "空闲"
+            },
+            micPct = (level * 100).toInt(),
+            uplinkKb = uplink / 1024,
+            events = events,
+            captureError = capErr,
+        )
 
         Spacer(Modifier.height(32.dp))
         HangupButton {

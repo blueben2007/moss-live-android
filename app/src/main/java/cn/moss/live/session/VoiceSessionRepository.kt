@@ -138,9 +138,11 @@ class VoiceSessionRepository(
         when (event) {
             is MossEvent.SessionAttached -> {
                 if (!translate) {
-                    // attach 后先下发指令，等 session.updated 确认成功再开麦（协议时序要求）
-                    val settings = settingsStore.snapshot()
-                    client.updateInstructions(settings.persona.ifBlank { DEFAULT_PERSONA })
+                    // 自定义人设非空才下发；留空走服务端默认对话行为（排除自定义指令干扰）
+                    val persona = settingsStore.snapshot().persona
+                    if (persona.isNotBlank()) {
+                        client.updateInstructions(persona)
+                    }
                 }
                 // 同传端点不发 session.update（不在其接受列表内）
             }

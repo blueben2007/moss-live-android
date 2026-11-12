@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -100,37 +101,35 @@ fun StopGlyph(size: Dp, modifier: Modifier = Modifier, color: Color = Color.Whit
     }
 }
 
-/** 联调诊断行：连接状态 / 麦克风电平 / 上行流量 / 最近服务端事件 / 采集异常。 */
+/** 联调诊断行：连接状态 / 阶段 / 麦克风电平 / 上行流量 / 服务端事件统计 / 采集异常，可一键复制。 */
 @Composable
 fun DiagnosticsRow(
     conn: String,
+    phase: String,
     micPct: Int,
     uplinkKb: Long,
     events: List<String>,
     captureError: String?,
     modifier: Modifier = Modifier,
 ) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val counts = events.groupingBy { it }.eachCount().entries
+        .joinToString(" ") { "${it.key}×${it.value}" }
+    val text = buildString {
+        append("诊断 连接:$conn · 阶段:$phase · 麦克:$micPct% · 上行:${uplinkKb}KB")
+        if (counts.isNotBlank()) append("\n事件: $counts")
+        captureError?.let { append("\n采集异常: $it") }
+    }
     Column(modifier) {
         Text(
-            "诊断 连接:$conn · 麦克:$micPct% · 上行:${uplinkKb}KB",
+            text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
         )
-        if (events.isNotEmpty()) {
-            Text(
-                "事件: " + events.takeLast(4).joinToString(" "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        captureError?.let {
-            Text(
-                "采集异常: $it",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
+        androidx.compose.material3.TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {
+            Text("复制诊断", style = MaterialTheme.typography.labelMedium)
         }
     }
 }

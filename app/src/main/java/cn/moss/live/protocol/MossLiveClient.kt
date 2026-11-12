@@ -172,7 +172,7 @@ class MossLiveClient(
         } catch (e: Exception) {
             MossEvent.Unknown("malformed-json")
         }
-        _recentEvents.value = (_recentEvents.value + action).takeLast(6)
+        _recentEvents.value = (_recentEvents.value + action).takeLast(10)
         when (event) {
             is MossEvent.SessionAttached -> {
                 sessionId = event.sessionId // 保存，供重连恢复
