@@ -25,18 +25,21 @@ object MossCommand {
         return o.toString()
     }
 
-    /** 整体替换会话指令（助理人设或同传指令），≤16000 字符。 */
+    /**
+     * 整体替换会话指令（助理人设或同传指令），≤16000 字符。
+     * 官方示例：session 对象在顶层，不在 data 内（与全部命令字段一致）。
+     */
     fun updateInstructions(instructions: String): String {
         val o = JSONObject()
         o.put("action", "session.update")
-        o.put("data", JSONObject().put("session", JSONObject().put("instructions", instructions)))
+        o.put("session", JSONObject().put("instructions", instructions))
         return o.toString()
     }
 
     fun changeVoice(voiceId: String): String {
         val o = JSONObject()
         o.put("action", "change_voice")
-        o.put("data", JSONObject().put("voice_name", voiceId))
+        o.put("voice_name", voiceId)
         return o.toString()
     }
 

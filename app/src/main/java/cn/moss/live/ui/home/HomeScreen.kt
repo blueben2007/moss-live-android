@@ -62,7 +62,7 @@ fun HomeScreen(container: AppContainer, nav: (String) -> Unit) {
             Text("摩斯语境", style = MaterialTheme.typography.headlineLarge)
             Spacer(Modifier.height(6.dp))
             Text(
-                "你的语音助理与随身翻译",
+                "你的语音助理与随身翻译 · v" + cn.moss.live.BuildConfig.VERSION_NAME,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -154,6 +154,12 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 Text("清空全部记录")
             }
         }
+        Text(
+            "摩斯语境 v" + cn.moss.live.BuildConfig.VERSION_NAME,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
         Spacer(Modifier.size(32.dp))
     }
 
