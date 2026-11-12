@@ -15,8 +15,8 @@ android {
         applicationId = "cn.moss.live"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.0.9"
+        versionCode = 11
+        versionName = "1.1.0"
     }
 
     // CI 环境（有 KEYSTORE_FILE env + 密钥文件存在）才注册 release 签名；

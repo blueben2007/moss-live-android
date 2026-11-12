@@ -107,7 +107,8 @@ class VoiceSessionRepository(
         beginSession(SessionType.ASSISTANT)
         collectEvents(translate = false)
         val persona = settings.persona
-        client.connect(null, if (settings.memoryEnabled) "user" else "session", settingsStore.ensureUserId())
+        // 完全对齐官方直连示例：裸 attach，不带 memory_scope/user 任何额外字段
+        client.connect(null, null, null)
         if (persona.isBlank()) {
             // Playground 同款流程：裸 attach → 直接开麦，不发任何 session.update
             client.micState(true)
