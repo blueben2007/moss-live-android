@@ -6,6 +6,10 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
+# Release 创建需要 GITHUB_TOKEN 具备写权限
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
