@@ -70,6 +70,7 @@ class MossLiveClient(
     private val pendingMeta = AtomicReference<MossEvent.AudioChunkMeta?>(null)
     @Volatile private var sessionId: String? = null
     @Volatile private var memoryScope: String? = null
+    @Volatile private var userId: String? = null
     @Volatile private var userClosed = false
     @Volatile private var reconnectAttempt = 0
     private var scope: CoroutineScope = newScope()
@@ -77,20 +78,27 @@ class MossLiveClient(
 
     private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** sessionId=null 建新会话；传原 session_id 恢复会话。memoryScope="user" 开长期记忆。 */
-    fun connect(sessionId: String?, memoryScope: String?) {
+    /**
+     * sessionId=null 建新会话；传原 session_id 恢复会话。memoryScope="user" 开长期记忆。
+     * userId：本机稳定标识，memory_scope=user 时服务端要求连接 URL 必须带 user 参数；
+     * 重连时沿用同一 user（同 user、同选项 reattach）。
+     */
+    fun connect(sessionId: String?, memoryScope: String?, userId: String? = null) {
         userClosed = false
         reconnectAttempt = 0
         this.sessionId = sessionId
         this.memoryScope = memoryScope
+        this.userId = userId
         scope = newScope()
         openSocket()
     }
 
     private fun openSocket() {
         _connState.value = if (reconnectAttempt == 0) ConnState.CONNECTING else ConnState.RECONNECTING
+        val url = if (userId.isNullOrBlank()) wsUrl
+        else "$wsUrl&user=${java.net.URLEncoder.encode(userId, "UTF-8")}"
         val request = Request.Builder()
-            .url(wsUrl)
+            .url(url)
             .header("Authorization", "Bearer ${apiKeyProvider()}")
             .build()
         ws = okhttp.newWebSocket(request, listener)

@@ -24,6 +24,8 @@ data class AppSettings(
     val memoryEnabled: Boolean,
     val lockCaption: Boolean,
     val persona: String,
+    /** 本机稳定用户标识（服务端长期记忆 memory_scope=user 必需）。 */
+    val userId: String,
 )
 
 /** 仅存设备本地的配置；API Key 永不出现在仓库或日志。 */
@@ -35,6 +37,7 @@ class SettingsDataStore(private val context: Context) {
         val MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
         val LOCK_CAPTION = booleanPreferencesKey("lock_caption")
         val PERSONA = stringPreferencesKey("persona")
+        val USER_ID = stringPreferencesKey("user_id")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -46,7 +49,20 @@ class SettingsDataStore(private val context: Context) {
             memoryEnabled = p[Keys.MEMORY_ENABLED] ?: true,
             lockCaption = p[Keys.LOCK_CAPTION] ?: false,
             persona = p[Keys.PERSONA] ?: "",
+            userId = p[Keys.USER_ID] ?: "",
         )
+    }
+
+    /**
+     * 稳定的本机用户标识：开启跨会话长期记忆（memory_scope=user）时，
+     * 服务端要求连接 URL 带 user 参数。首次调用生成并持久化，之后不变。
+     */
+    suspend fun ensureUserId(): String {
+        val current = context.dataStore.data.first()[Keys.USER_ID]
+        if (!current.isNullOrBlank()) return current
+        val fresh = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { it[Keys.USER_ID] = fresh }
+        return fresh
     }
 
     suspend fun snapshot(): AppSettings = settings.first()

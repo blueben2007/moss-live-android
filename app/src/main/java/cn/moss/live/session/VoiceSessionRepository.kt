@@ -74,7 +74,7 @@ class VoiceSessionRepository(
         }
         beginSession(SessionType.ASSISTANT)
         collectEvents(translate = false, settings = settings)
-        client.connect(null, if (settings.memoryEnabled) "user" else "session")
+        connectWithMemory(settings)
     }
 
     suspend fun startTranslate() {
@@ -85,7 +85,16 @@ class VoiceSessionRepository(
         }
         beginSession(SessionType.TRANSLATE)
         collectEvents(translate = true, settings = settings)
-        client.connect(null, if (settings.memoryEnabled) "user" else "session")
+        connectWithMemory(settings)
+    }
+
+    /** memory_scope=user 必须带 user 标识（服务端校验），由本机稳定 UUID 供给。 */
+    private suspend fun connectWithMemory(settings: AppSettings) {
+        if (settings.memoryEnabled) {
+            client.connect(null, "user", settingsStore.ensureUserId())
+        } else {
+            client.connect(null, "session", null)
+        }
     }
 
     private suspend fun beginSession(mode: SessionType) {
