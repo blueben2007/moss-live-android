@@ -26,6 +26,8 @@ data class AppSettings(
     val persona: String,
     /** 本机稳定用户标识（服务端长期记忆 memory_scope=user 必需）。 */
     val userId: String,
+    /** 同传源语言（"" = 自动检测；服务端自动检测异常时显式指定）。 */
+    val translateSource: String,
 )
 
 /** 仅存设备本地的配置；API Key 永不出现在仓库或日志。 */
@@ -38,6 +40,7 @@ class SettingsDataStore(private val context: Context) {
         val LOCK_CAPTION = booleanPreferencesKey("lock_caption")
         val PERSONA = stringPreferencesKey("persona")
         val USER_ID = stringPreferencesKey("user_id")
+        val TRANSLATE_SOURCE = stringPreferencesKey("translate_source")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -50,6 +53,7 @@ class SettingsDataStore(private val context: Context) {
             lockCaption = p[Keys.LOCK_CAPTION] ?: false,
             persona = p[Keys.PERSONA] ?: "",
             userId = p[Keys.USER_ID] ?: "",
+            translateSource = p[Keys.TRANSLATE_SOURCE] ?: "",
         )
     }
 
@@ -76,4 +80,6 @@ class SettingsDataStore(private val context: Context) {
     suspend fun setLockCaption(value: Boolean) = context.dataStore.edit { it[Keys.LOCK_CAPTION] = value }
 
     suspend fun setPersona(value: String) = context.dataStore.edit { it[Keys.PERSONA] = value }
+
+    suspend fun setTranslateSource(value: String) = context.dataStore.edit { it[Keys.TRANSLATE_SOURCE] = value }
 }

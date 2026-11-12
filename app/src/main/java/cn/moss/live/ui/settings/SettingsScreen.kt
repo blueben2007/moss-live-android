@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package cn.moss.live.ui.settings
 
 import androidx.compose.foundation.background
@@ -114,6 +116,44 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
             }
         }
 
+        Section("翻译源语言（对方说的话）") {
+            // FlowRow 自动换行
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            ) {
+                TranslateSourceChip("", "自动检测", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("en", "英语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("ja", "日语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("ko", "韩语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("fr", "法语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("de", "德语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("es", "西班牙语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+                TranslateSourceChip("ru", "俄语", settings?.translateSource) {
+                    scope.launch { container.settings.setTranslateSource(it) }
+                }
+            }
+            Spacer(Modifier.size(8.dp))
+            Text(
+                "自动检测异常时（译文=原文回显），显式指定对方语言",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         Section("行为") {
             SettingSwitch(
                 title = "跨会话长期记忆",
@@ -182,6 +222,15 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
             },
         )
     }
+}
+
+@Composable
+private fun TranslateSourceChip(value: String, label: String, current: String?, onSelect: (String) -> Unit) {
+    FilterChip(
+        selected = current == value,
+        onClick = { onSelect(value) },
+        label = { Text(label) },
+    )
 }
 
 @Composable

@@ -81,6 +81,9 @@ class VoiceSessionRepository(
     @Volatile private var dbSessionId: String? = null
     @Volatile private var messageCount = 0
 
+    /** 非空表示本次助理会话要先下发自定义人设（attach → session.update → 等 updated → 开麦）。 */
+    @Volatile private var pendingPersonaUpdate: String? = null
+
     // ---- 翻译会话状态（turn → 内容） ----
     private val turnSourceFinal = mutableMapOf<Int, String>()
     private val turnSourceLive = mutableMapOf<Int, String>()
@@ -103,7 +106,20 @@ class VoiceSessionRepository(
         }
         beginSession(SessionType.ASSISTANT)
         collectEvents(translate = false)
+        val persona = settings.persona
         client.connect(null, if (settings.memoryEnabled) "user" else "session", settingsStore.ensureUserId())
+        if (persona.isBlank()) {
+            // Playground 同款流程：裸 attach → 直接开麦，不发任何 session.update
+            client.micState(true)
+            mic.start(android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            if (speaker == null) {
+                speaker = SpeakerPlayback(client).also { it.start(scope) }
+            }
+            _ui.update { it.copy(phase = Phase.Listening) }
+        } else {
+            // 自定义人设：attach → session.update → 等 session.updated → 开麦
+            pendingPersonaUpdate = persona
+        }
     }
 
     suspend fun startTranslate() {
@@ -115,13 +131,19 @@ class VoiceSessionRepository(
         beginSession(SessionType.TRANSLATE)
         collectEvents(translate = true)
         // 同传端点：不带 user/memory 参数（无会话恢复，每条连接新会话）
-        client.connect(null, null, null, urlOverride = INTERPRET_URL, interpret = true)
+        client.connect(null, null, null, urlOverride = interpretUrl(settings), interpret = true)
     }
+
+    /** 同传端点 URL：target 固定中文；源语言可显式指定（服务端自动检测异常时兜底）。 */
+    private fun interpretUrl(settings: AppSettings): String =
+        if (settings.translateSource.isBlank()) INTERPRET_URL
+        else "wss://api.mosi.cn/v1/realtime/interpret?model=moss-live-1.0&source=${settings.translateSource}&target=zh"
 
     private suspend fun beginSession(mode: SessionType) {
         val id = UUID.randomUUID().toString()
         dbSessionId = id
         messageCount = 0
+        pendingPersonaUpdate = null
         db.sessionDao().insert(
             SessionEntity(
                 id = id,
@@ -153,9 +175,8 @@ class VoiceSessionRepository(
         when (event) {
             is MossEvent.SessionAttached -> {
                 if (!translate) {
-                    // session.updated 只在 session.update 之后返回，必须下发（默认人设兜底）
-                    val persona = settingsStore.snapshot().persona
-                    client.updateInstructions(persona.ifBlank { DEFAULT_PERSONA })
+                    // 仅自定义人设时下发；pendingPersonaUpdate 为空表示已按 Playground 流程直接开麦
+                    pendingPersonaUpdate?.let { client.updateInstructions(it) }
                 }
                 // 同传端点不发 session.update（不在其接受列表内）
             }
@@ -165,6 +186,11 @@ class VoiceSessionRepository(
                     _ui.update { it.copy(phase = Phase.Failed("会话配置被拒绝：${event.error}")) }
                     return
                 }
+                if (!translate && pendingPersonaUpdate == null) {
+                    // 裸 attach 路径已在 startAssistant 开麦，这里无需重复
+                    return
+                }
+                pendingPersonaUpdate = null
                 client.micState(true)
                 // 翻译无播放，用普通 MIC 音源（部分 ROM 上 VOICE_COMMUNICATION 会静音）
                 mic.start(
