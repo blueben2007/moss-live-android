@@ -23,7 +23,8 @@ class MicCapture(private val onChunk: (ByteArray) -> Unit) {
 
     companion object {
         private const val SAMPLE_RATE = 16_000
-        private const val CHUNK_SAMPLES = 2048 // 128ms
+        // 官方 Playground 同款帧大小：320 采样 = 20ms/帧
+        private const val CHUNK_SAMPLES = 320
     }
 
     @Volatile private var running = false

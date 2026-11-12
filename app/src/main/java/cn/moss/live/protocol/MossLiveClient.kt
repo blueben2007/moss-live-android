@@ -123,6 +123,9 @@ class MossLiveClient(
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer ${apiKeyProvider()}")
+            // 官方 Playground 直连示例要求的第二个头：Platform: moss-platform
+            // （wscat 示例：-H "Authorization: Bearer $MOSS_API_KEY" -H "Platform: moss-platform"）
+            .header("Platform", "moss-platform")
             .build()
         ws = okhttp.newWebSocket(request, listener)
     }
