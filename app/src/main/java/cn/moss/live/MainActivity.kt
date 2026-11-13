@@ -2,8 +2,11 @@ package cn.moss.live
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,6 +36,26 @@ class MainActivity : ComponentActivity() {
 
     private val container by lazy { (application as MossLiveApp).container }
 
+    /**
+     * 锁屏保活的关键：Doze 会在熄屏一段时间后挂起后台网络，前台服务也不例外。
+     * 申请「忽略电池优化」，每台设备只弹一次（用户拒绝后不再打扰，可在系统设置里手动改）。
+     */
+    private fun requestBatteryExemptionOnce() {
+        val prefs = getSharedPreferences("boot", MODE_PRIVATE)
+        if (prefs.getBoolean("battery_asked", false)) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        prefs.edit().putBoolean("battery_asked", true).apply()
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName")),
+            )
+        } catch (_: Exception) {
+            // 部分 ROM 没有该页面：忽略，用户可在系统设置中手动设置
+        }
+    }
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { /* 结果由各界面兜底提示 */ }
 
@@ -44,6 +67,7 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
         permissionLauncher.launch(permissions.toTypedArray())
+        requestBatteryExemptionOnce()
         setContent {
             MossLiveTheme {
                 AppRoot(container)

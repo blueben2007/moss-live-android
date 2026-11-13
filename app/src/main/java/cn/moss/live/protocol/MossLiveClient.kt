@@ -95,6 +95,9 @@ class MossLiveClient(
     @Volatile private var connectUrl: String = wsUrl
     @Volatile private var userClosed = false
     @Volatile private var reconnectAttempt = 0
+
+    /** 断线重连后、尚未收到 session_attached 时为 true：重连会话的麦克风状态需重新开启。 */
+    @Volatile private var reattaching = false
     private var scope: CoroutineScope = newScope()
     private var pingJob: Job? = null
 
@@ -115,6 +118,7 @@ class MossLiveClient(
     ) {
         userClosed = false
         reconnectAttempt = 0
+        reattaching = false
         this.sessionId = sessionId
         this.memoryScope = memoryScope
         this.userId = if (interpret) null else userId
@@ -197,6 +201,13 @@ class MossLiveClient(
             is MossEvent.SessionAttached -> {
                 sessionId = event.sessionId // 保存，供重连恢复
                 _connState.value = ConnState.CONNECTED
+                // 锁屏断网后的重连：新连接上的麦克风状态默认未开，必须重发 mic_state，
+                // 否则上行音频照发但服务端不听，表现为「不回复/不记录」。
+                // （同传端点在 onOpen 里已发过 mic_state，这里只补助理。）
+                if (reattaching) {
+                    reattaching = false
+                    if (!interpret) ws?.send(MossCommand.micState(true))
+                }
             }
             is MossEvent.SessionClosing -> {
                 _lastDisconnect.value = "closing code=${event.code} reason=${event.reason} reconnect=${event.reconnect}"
@@ -226,6 +237,7 @@ class MossLiveClient(
         }
         val delayMs = minOf(30_000L, 1_000L shl reconnectAttempt.coerceAtMost(5))
         reconnectAttempt++
+        reattaching = true
         _connState.value = ConnState.RECONNECTING
         scope.launch {
             delay(delayMs)

@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.net.wifi.WifiManager
 import android.os.PowerManager
 import cn.moss.live.AppContainer
 import cn.moss.live.MossLiveApp
@@ -37,6 +38,7 @@ class VoiceForegroundService : Service() {
 
     private val container: AppContainer by lazy { (application as MossLiveApp).container }
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var job: Job? = null
     private var lastNotifyText = ""
     private var lastNotifyAt = 0L
@@ -56,6 +58,7 @@ class VoiceForegroundService : Service() {
     private fun begin(mode: SessionType) {
         createChannelAndForeground(mode)
         acquireWakeLock()
+        acquireWifiLock()
         job?.cancel()
         job = container.appScope.launch {
             if (mode == SessionType.ASSISTANT) container.repo.startAssistant()
@@ -154,11 +157,27 @@ class VoiceForegroundService : Service() {
         }
     }
 
+    /**
+     * 熄屏后 Wi-Fi 默认进入省电模式，WebSocket 容易断线/延迟。持有 Wi-Fi 锁保持连接活跃。
+     * 说明：API 34 起 HIGH_PERF 被标为弃用，各厂商实际效果不一，属于尽力而为。
+     */
+    @Suppress("DEPRECATION")
+    private fun acquireWifiLock() {
+        if (wifiLock != null) return
+        val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "cn.moss.live:wifi").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
     override fun onDestroy() {
         job?.cancel()
         job = null
         wakeLock?.release()
         wakeLock = null
+        wifiLock?.takeIf { it.isHeld }?.release()
+        wifiLock = null
         super.onDestroy()
     }
 }
