@@ -101,7 +101,7 @@ fun StopGlyph(size: Dp, modifier: Modifier = Modifier, color: Color = Color.Whit
     }
 }
 
-/** 联调诊断行：连接状态 / 阶段 / 麦克风电平 / 上行流量 / 会话事件累计 / 最近事件流 / 断连原因 / 采集异常，可一键复制。 */
+/** 联调诊断行：连接状态 / 阶段 / 麦克风电平 / 上行流量 / 会话事件累计 / 已发命令 / 事件时间线 / 断连原因 / 采集异常，可一键复制。 */
 @Composable
 fun DiagnosticsRow(
     conn: String,
@@ -112,14 +112,19 @@ fun DiagnosticsRow(
     seq: List<String>,
     captureError: String?,
     lastDisconnect: String,
+    sentCounts: Map<String, Int> = emptyMap(),
+    timeline: List<String> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val countsText = eventCounts.entries.joinToString(" ") { "${it.key}×${it.value}" }
+    val sentText = sentCounts.entries.joinToString(" ") { "${it.key}×${it.value}" }
     val text = buildString {
         append("诊断 连接:$conn · 阶段:$phase · 麦克:$micPct% · 上行:${uplinkKb}KB")
         if (countsText.isNotBlank()) append("\n事件累计: $countsText")
+        if (sentText.isNotBlank()) append("\n已发送: $sentText")
         if (seq.isNotEmpty()) append("\n最近: " + seq.takeLast(6).joinToString(" "))
+        if (timeline.isNotEmpty()) append("\n时间线: " + timeline.takeLast(30).joinToString(" "))
         if (lastDisconnect.isNotBlank()) append("\n断连: $lastDisconnect")
         captureError?.let { append("\n采集异常: $it") }
     }
@@ -128,7 +133,7 @@ fun DiagnosticsRow(
             text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 5,
+            maxLines = 8,
             overflow = TextOverflow.Ellipsis,
         )
         androidx.compose.material3.TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {

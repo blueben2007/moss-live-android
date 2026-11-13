@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okio.ByteString
@@ -86,6 +87,36 @@ class MossLiveClient(
     /** 最近一次断连/服务端关闭的原因（code/reason），供诊断显示。 */
     val lastDisconnect: StateFlow<String> = _lastDisconnect
 
+    private val _sentCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+
+    /** 本次会话客户端各上行命令的累计发送数（connect 时清零），用来核对回执有没有漏发。 */
+    val sentCounts: StateFlow<Map<String, Int>> = _sentCounts
+
+    private val _eventLog = MutableStateFlow<List<String>>(emptyList())
+
+    /** 带时间戳的关键事件时间线（↓服务端 ↑客户端，最近 40 条，已略去高频事件）。 */
+    val eventLog: StateFlow<List<String>> = _eventLog
+
+    @Volatile private var connectedAtMs = 0L
+    private val noisyActions = setOf(
+        "input.transcript.updated", "output.transcript.updated", "response.audio.context",
+        "playback.chunk.completed", "pong", "ping",
+    )
+
+    private fun logEvent(arrow: String, action: String) {
+        if (action in noisyActions) return
+        val t = (System.currentTimeMillis() - connectedAtMs) / 1000.0
+        val line = String.format(java.util.Locale.ROOT, "+%.1fs%s%s", t, arrow, action)
+        _eventLog.update { (it + line).takeLast(40) }
+    }
+
+    /** 发送上行命令并计数/记入时间线。 */
+    private fun sendCommand(json: String, action: String) {
+        ws?.send(json)
+        _sentCounts.update { it + (action to ((it[action] ?: 0) + 1)) }
+        logEvent("↑", action)
+    }
+
     private var ws: WebSocket? = null
     private val pendingMeta = AtomicReference<MossEvent.AudioChunkMeta?>(null)
     @Volatile private var sessionId: String? = null
@@ -98,6 +129,9 @@ class MossLiveClient(
 
     /** 断线重连后、尚未收到 session_attached 时为 true：重连会话的麦克风状态需重新开启。 */
     @Volatile private var reattaching = false
+
+    /** 重连 attach 被服务端拒绝（如限免会话 5 分钟到期）→ 下次重连改用全新会话。 */
+    @Volatile private var attachRejected = false
     private var scope: CoroutineScope = newScope()
     private var pingJob: Job? = null
 
@@ -119,6 +153,7 @@ class MossLiveClient(
         userClosed = false
         reconnectAttempt = 0
         reattaching = false
+        attachRejected = false
         this.sessionId = sessionId
         this.memoryScope = memoryScope
         this.userId = if (interpret) null else userId
@@ -126,6 +161,10 @@ class MossLiveClient(
         this.connectUrl = urlOverride ?: wsUrl
         _bytesSent.value = 0L
         _eventCounts.value = emptyMap()
+        _sentCounts.value = emptyMap()
+        _eventLog.value = emptyList()
+        _lastDisconnect.value = "" // 否则上一次会话遗留的断连信息会被误认为本次的
+        connectedAtMs = System.currentTimeMillis()
         scope = newScope()
         openSocket()
     }
@@ -150,6 +189,7 @@ class MossLiveClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             reconnectAttempt = 0
             webSocket.send(MossCommand.attachSession(sessionId, memoryScope))
+            logEvent("↑", "attach_session")
             if (interpret) {
                 // 同传端点时序：attach → media.mode(tagged-v1) → 开麦
                 webSocket.send(MossCommand.mediaModeTagged())
@@ -171,12 +211,15 @@ class MossLiveClient(
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             stopPing()
             _lastDisconnect.value = "ws-closed code=$code reason=$reason"
+            if (code == 1008) attachRejected = true
+            logEvent("✕", "closed:$code")
             maybeReconnect()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             stopPing()
             _lastDisconnect.value = "ws-failure ${t.message} http=${response?.code}"
+            logEvent("✕", "failure")
             _events.tryEmit(
                 MossEvent.Error(response?.code?.toString(), t.message ?: "connection failure"),
             )
@@ -197,17 +240,15 @@ class MossLiveClient(
         _eventCounts.value = _eventCounts.value.toMutableMap().also {
             it[action] = (it[action] ?: 0) + 1
         }
+        logEvent("↓", action)
         when (event) {
             is MossEvent.SessionAttached -> {
                 sessionId = event.sessionId // 保存，供重连恢复
                 _connState.value = ConnState.CONNECTED
-                // 锁屏断网后的重连：新连接上的麦克风状态默认未开，必须重发 mic_state，
-                // 否则上行音频照发但服务端不听，表现为「不回复/不记录」。
-                // （同传端点在 onOpen 里已发过 mic_state，这里只补助理。）
-                if (reattaching) {
-                    reattaching = false
-                    if (!interpret) ws?.send(MossCommand.micState(true))
-                }
+                // 是否重连交给仓库层处理（mic_state 重发与自定义人设重配的顺序由它决定）
+                val wasReconnecting = reattaching
+                reattaching = false
+                _events.tryEmit(MossEvent.SessionAttached(event.sessionId, wasReconnecting))
             }
             is MossEvent.SessionClosing -> {
                 _lastDisconnect.value = "closing code=${event.code} reason=${event.reason} reconnect=${event.reconnect}"
@@ -229,11 +270,17 @@ class MossLiveClient(
         )
     }
 
-    /** 递增退避重连：1s,2s,4s,8s,16s 后封顶 30s，用原 session_id 恢复。 */
+    /** 递增退避重连：1s,2s,4s,8s,16s 后封顶 30s；若重连 attach 被拒（会话过期）改用全新会话。 */
     private fun maybeReconnect() {
         if (userClosed) {
             _connState.value = ConnState.CLOSED
             return
+        }
+        if (attachRejected) {
+            // 服务端已不认识旧 session（如限免 5 分钟到期）：换全新会话续聊，
+            // 上下文连续性由 memory_scope=user 的服务端长期记忆兜底。
+            sessionId = null
+            attachRejected = false
         }
         val delayMs = minOf(30_000L, 1_000L shl reconnectAttempt.coerceAtMost(5))
         reconnectAttempt++
@@ -273,27 +320,27 @@ class MossLiveClient(
     }
 
     fun micState(enabled: Boolean) {
-        ws?.send(MossCommand.micState(enabled))
+        sendCommand(MossCommand.micState(enabled), "mic_state:$enabled")
     }
 
     fun updateInstructions(instructions: String) {
-        ws?.send(MossCommand.updateInstructions(instructions))
+        sendCommand(MossCommand.updateInstructions(instructions), "session.update")
     }
 
     fun changeVoice(voiceId: String) {
-        ws?.send(MossCommand.changeVoice(voiceId))
+        sendCommand(MossCommand.changeVoice(voiceId), "change_voice")
     }
 
     fun chunkCompleted(runId: String, turnId: String?, chunkId: String) {
-        ws?.send(MossCommand.playbackChunkCompleted(runId, turnId, chunkId))
+        sendCommand(MossCommand.playbackChunkCompleted(runId, turnId, chunkId), "playback.chunk.completed")
     }
 
     fun playbackCompleted(runId: String, turnId: String?) {
-        ws?.send(MossCommand.playbackCompleted(runId, turnId))
+        sendCommand(MossCommand.playbackCompleted(runId, turnId), "playback.completed")
     }
 
     fun playbackStopped(runId: String, turnId: String?, playedAudioMs: Long) {
-        ws?.send(MossCommand.playbackStopped(runId, turnId, playedAudioMs))
+        sendCommand(MossCommand.playbackStopped(runId, turnId, playedAudioMs), "playback.stopped($playedAudioMs ms)")
     }
 
     /** 挂断：不再重连，释放连接。 */

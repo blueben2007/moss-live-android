@@ -27,9 +27,10 @@ import kotlin.concurrent.thread
 class SpeakerPlayback(private val client: MossLiveClient) {
 
     private class RunState {
-        var received = 0
-        var played = 0
-        var serverDone = false
+        @Volatile var turnId = ""
+        @Volatile var received = 0
+        @Volatile var played = 0
+        @Volatile var serverDone = false
         var completedSent = false
     }
 
@@ -81,7 +82,10 @@ class SpeakerPlayback(private val client: MossLiveClient) {
             client.events.collect { ev ->
                 when (ev) {
                     is AudioChunk -> {
-                        runs.computeIfAbsent(ev.runId) { RunState() }.received++
+                        runs.computeIfAbsent(ev.runId) { RunState() }.also {
+                            it.turnId = ev.turnId
+                            it.received++
+                        }
                         queue.add(ev)
                     }
                     is MossEvent.ResponseAudioDone -> onServerDone(ev.runId)
@@ -94,20 +98,26 @@ class SpeakerPlayback(private val client: MossLiveClient) {
     }
 
     private fun onServerDone(runId: String) {
-        runs[runId]?.serverDone = true
         val state = runs[runId] ?: return
-        // 播放线程里检查也会触发；这里双保险（queue 已空时立即补发）
-        if (state.played >= state.received) {
-            // queued chunks 未必已写完，交给播放线程统一回执，避免乱序
-        }
+        state.serverDone = true
+        // 播放线程可能早已写完最后一块、而 response.audio.done 比它晚到：
+        // 这时不会再有后续块触发检查，必须在这里补发 playback.completed，
+        // 否则该 run 永远不收尾，服务端会一直等（表现为对话中断）。
+        maybeCompleteRun(runId, state.turnId)
     }
 
     private fun maybeCompleteRun(runId: String, turnId: String) {
         val state = runs[runId] ?: return
-        if (state.serverDone && state.played >= state.received && !state.completedSent) {
-            state.completedSent = true
-            client.playbackCompleted(runId, turnId)
+        // 播放线程与事件协程都会调用：加锁保证只发一次
+        val shouldSend = synchronized(state) {
+            if (state.serverDone && state.played >= state.received && !state.completedSent) {
+                state.completedSent = true
+                true
+            } else {
+                false
+            }
         }
+        if (shouldSend) client.playbackCompleted(runId, turnId)
     }
 
     /** 被打断：停播清队，回 playback.stopped（含当前已播毫秒数）。 */

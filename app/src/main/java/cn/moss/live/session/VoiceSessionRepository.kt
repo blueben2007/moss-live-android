@@ -195,14 +195,22 @@ class VoiceSessionRepository(
         when (event) {
             is MossEvent.SessionAttached -> {
                 if (!translate) {
-                    val persona = pendingPersonaUpdate
-                    if (persona != null) {
-                        // 自定义人设：先下发，等 session.updated 再开麦
-                        client.updateInstructions(persona)
-                    } else if (bareStartPending) {
-                        // 裸 attach：session 已建立，现在才开麦
-                        bareStartPending = false
-                        startAssistantAudio()
+                    if (event.reconnected) {
+                        // 断线重连：服务端麦克风状态随连接重置，必须重开；
+                        // 若是旧会话过期换的新会话，自定义人设也要重配。
+                        val persona = settingsStore.snapshot().persona
+                        if (persona.isNotBlank()) client.updateInstructions(persona)
+                        client.micState(true)
+                    } else {
+                        val persona = pendingPersonaUpdate
+                        if (persona != null) {
+                            // 自定义人设：先下发，等 session.updated 再开麦
+                            client.updateInstructions(persona)
+                        } else if (bareStartPending) {
+                            // 裸 attach：session 已建立，现在才开麦
+                            bareStartPending = false
+                            startAssistantAudio()
+                        }
                     }
                 }
                 // 同传端点不发 session.update（不在其接受列表内）
@@ -211,10 +219,6 @@ class VoiceSessionRepository(
             is MossEvent.SessionUpdated -> {
                 if (event.error.isNotBlank()) {
                     _ui.update { it.copy(phase = Phase.Failed("会话配置被拒绝：${event.error}")) }
-                    return
-                }
-                if (!translate && pendingPersonaUpdate == null) {
-                    // 裸 attach 路径已在 startAssistant 开麦，这里无需重复
                     return
                 }
                 pendingPersonaUpdate = null

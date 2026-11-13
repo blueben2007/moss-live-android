@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import cn.moss.live.AppContainer
 import cn.moss.live.stopVoiceSession
 import cn.moss.live.session.Phase
@@ -58,10 +59,9 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
     LaunchedEffect(ui.phase) {
         if (ui.phase == Phase.Idle) onFinished()
     }
-    // 字幕更新时滚到底部
-    LaunchedEffect(ui.pairs) {
-        if (ui.pairs.isNotEmpty()) listState.animateScrollToItem(ui.pairs.size - 1)
-    }
+    // 不再手动滚动：列表用 reverseLayout 以底部为锚点，最新一句永远贴底，
+    // 句子变长时向上生长。原先 animateScrollToItem 在字幕高频更新时被不断取消，
+    // 且按"项顶部对齐"滚动，超长句子的结尾会被挤出屏幕。
 
     Column(
         modifier = Modifier
@@ -89,15 +89,18 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
         )
         Spacer(Modifier.height(18.dp))
 
+        // reverseLayout：index 0 在最底部。注意不能给 items 设 key——
+        // 有 key 时列表会锚定旧的那一项，新增的最新句反而被挤到屏幕外。
         LazyColumn(
             state = listState,
+            reverseLayout = true,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(30.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
         ) {
-            itemsIndexed(ui.pairs) { _, pair ->
-                PairView(pair, showSource = showSource)
+            itemsIndexed(ui.pairs.asReversed()) { index, pair ->
+                PairView(pair, showSource = showSource, isLatest = index == 0)
             }
         }
 
@@ -132,7 +135,7 @@ fun TranslateScreen(container: AppContainer, onFinished: () -> Unit) {
 }
 
 @Composable
-private fun PairView(pair: TranslatePair, showSource: Boolean) {
+private fun PairView(pair: TranslatePair, showSource: Boolean, isLatest: Boolean) {
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -148,8 +151,10 @@ private fun PairView(pair: TranslatePair, showSource: Boolean) {
         }
         Text(
             pair.translated.ifBlank { "…" },
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.onBackground,
+            // 讲座语速快、句子长：字号降到 24sp，一屏能容纳更多句
+            style = MaterialTheme.typography.displaySmall.copy(fontSize = 24.sp, lineHeight = 34.sp),
+            color = if (isLatest) MaterialTheme.colorScheme.onBackground
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             textAlign = TextAlign.Center,
         )
     }

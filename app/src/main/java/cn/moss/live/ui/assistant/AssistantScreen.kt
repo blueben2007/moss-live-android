@@ -132,6 +132,8 @@ fun AssistantScreen(container: AppContainer, onFinished: () -> Unit) {
             seq = events,
             captureError = capErr,
             lastDisconnect = container.client.lastDisconnect.collectAsState().value,
+            sentCounts = container.client.sentCounts.collectAsState().value,
+            timeline = container.client.eventLog.collectAsState().value,
         )
 
         Spacer(Modifier.height(32.dp))

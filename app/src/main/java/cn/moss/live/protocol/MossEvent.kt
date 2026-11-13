@@ -8,8 +8,8 @@ import org.json.JSONObject
  */
 sealed interface MossEvent {
 
-    /** session_attached：会话已建立，保存 sessionId 供重连与记忆续用。 */
-    data class SessionAttached(val sessionId: String) : MossEvent
+    /** session_attached：会话已建立，保存 sessionId 供重连与记忆续用；reconnected=true 表示这是断线重连。 */
+    data class SessionAttached(val sessionId: String, val reconnected: Boolean = false) : MossEvent
 
     /** session.updated：session.update 的回执，error 为空串表示成功。 */
     data class SessionUpdated(val error: String, val tools: List<String>) : MossEvent
